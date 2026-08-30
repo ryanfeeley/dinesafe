@@ -102,15 +102,29 @@ jobs:
           test -s data/dinesafe.csv
           head -n 3 data/dinesafe.csv
 
-      - name: Commit updated data
+      - name: Patch frontend diagnostics
         shell: bash
         run: |
-          if git diff --quiet -- data/dinesafe.csv; then
-            echo "DineSafe data is unchanged."
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text()
+          s = s.replace(
+              "err=>{status(err.code===1?'Location permission was denied. Enable location access for this site and try again.':'Could not determine your location: '+esc(err.message),true);",
+              "err=>{const secure=window.isSecureContext?'secure':'not secure';const msg=err.code===1?'Location permission was denied by iOS/Safari for this site. In Safari, open Page Menu → Website Settings → Location → Allow. Also check Settings → Privacy & Security → Location Services → Safari Websites. Then reload this page.':err.code===2?'Your device could not determine a location. Check Location Services and network access.':'Location lookup timed out. Try again.';status(msg+' (error '+err.code+', '+secure+' context)',true);"
+          )
+          p.write_text(s)
+          PY
+
+      - name: Commit updated site data
+        shell: bash
+        run: |
+          if git diff --quiet -- index.html data/dinesafe.csv; then
+            echo "DineSafe data and frontend are unchanged."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/dinesafe.csv
+          git add index.html data/dinesafe.csv
           git commit -m "Update normalized DineSafe data"
           git push
