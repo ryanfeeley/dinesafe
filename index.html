@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f2">
+<meta name="color-scheme" content="light dark">
+<title>DineSafe Nearby — Toronto</title>
+<style>
+:root{
+  --bg:#f5f6f2;--surface:#ffffff;--text:#152019;--muted:#687169;--line:#dfe4de;
+  --accent:#176b44;--accent-ink:#ffffff;--accent-soft:#e7f1eb;--good:#176b44;
+  --warn:#956000;--bad:#b32b35;--shadow:0 8px 24px rgba(21,32,25,.07);
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#101512;--surface:#181f1b;--text:#f0f4f1;--muted:#a4aea7;--line:#2e3932;
+  --accent:#73c69d;--accent-ink:#0e1712;--accent-soft:#1c3528;--good:#79d1a5;
+  --warn:#e2b766;--bad:#ff8b94;--shadow:none;
+}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit}button,a{-webkit-tap-highlight-color:transparent}a{color:inherit}
+.shell{width:min(100%,760px);margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 14px calc(36px + env(safe-area-inset-bottom))}
+.header{padding:8px 2px 18px}.brand{display:flex;align-items:center;gap:8px;color:var(--accent);font-size:.76rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block}
+h1{margin:8px 0 7px;font-size:clamp(2rem,10vw,3rem);line-height:.98;letter-spacing:-.05em;max-width:12ch}.intro{margin:0;color:var(--muted);font-size:.96rem;max-width:42rem}
+.locate-card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:14px;box-shadow:var(--shadow);margin-bottom:12px}.locate-row{display:flex;align-items:center;gap:12px}.loc-icon{flex:0 0 42px;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-size:1.2rem}.loc-copy{min-width:0;flex:1}.loc-title{font-weight:800;letter-spacing:-.01em}.loc-sub{margin-top:2px;color:var(--muted);font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.locate-btn{width:100%;min-height:52px;margin-top:13px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);font-weight:800;padding:0 16px;cursor:pointer}.locate-btn:disabled{opacity:.58;cursor:wait}
+.toolbar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:8px 0 10px;margin:0 -2px}.toolbar-inner{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:0 2px}.toolbar-inner::-webkit-scrollbar{display:none}.chip,.filter-toggle{flex:0 0 auto;min-height:42px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text);padding:0 13px;font-weight:730;font-size:.88rem;cursor:pointer}.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.filter-toggle{display:inline-flex;align-items:center;gap:7px}.filter-toggle .count{display:none;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-size:.7rem;align-items:center;justify-content:center}.filter-toggle .count.show{display:inline-flex}
+.filters{display:none;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;margin:2px 0 14px}.filters.open{display:block}.filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;margin:0 0 5px;font-size:.76rem;color:var(--muted);font-weight:760}.field select{width:100%;min-height:46px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);padding:0 34px 0 11px}.checkrow{display:flex;align-items:flex-start;gap:10px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line);font-size:.9rem}.checkrow input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--accent);flex:0 0 auto}
+.status{display:none;margin:4px 0 12px;padding:11px 12px;border-radius:13px;background:var(--accent-soft);font-size:.88rem}.status.show{display:block}.status.error{background:color-mix(in srgb,var(--bad) 12%,var(--surface));color:var(--bad)}
+.results-head{display:flex;justify-content:space-between;align-items:end;gap:12px;padding:13px 2px 10px}.results-head h2{margin:0;font-size:1.12rem;letter-spacing:-.015em}.summary{color:var(--muted);font-size:.8rem;text-align:right}
+.list{display:grid;gap:9px}.item{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 1px 0 rgba(0,0,0,.02)}.topline{display:flex;align-items:flex-start;gap:12px}.rank{flex:0 0 30px;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);font-size:.76rem;font-weight:820;color:var(--muted)}.maincopy{min-width:0;flex:1}.item h3{margin:0;font-size:1.03rem;line-height:1.25;letter-spacing:-.016em}.address{margin-top:3px;color:var(--muted);font-size:.84rem}.distance{flex:0 0 auto;text-align:right;color:var(--accent);font-weight:850;font-size:.98rem}.distance small{display:block;margin-top:1px;color:var(--muted);font-weight:650;font-size:.65rem}.inspection{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;margin:13px 0 11px;padding:11px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.datebox{min-width:78px}.datebox strong{display:block;font-size:1rem;letter-spacing:-.015em}.datebox span{display:block;margin-top:1px;color:var(--muted);font-size:.72rem}.inspection-copy{min-width:0}.statusline{font-size:.88rem;font-weight:760}.type{margin-top:2px;color:var(--muted);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.statusline.pass{color:var(--good)}.statusline.conditional{color:var(--warn)}.statusline.closed{color:var(--bad)}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.action{min-height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;text-decoration:none;font-size:.86rem;font-weight:780;background:var(--bg);border:1px solid var(--line)}.action.primary{background:var(--accent-soft);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 22%,var(--line))}
+.empty{padding:28px 20px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:18px;background:color-mix(in srgb,var(--surface) 52%,transparent)}.footer{margin:22px 3px 0;color:var(--muted);font-size:.74rem;line-height:1.55}.spinner{width:14px;height:14px;display:inline-block;border:2px solid color-mix(in srgb,var(--accent) 25%,transparent);border-top-color:var(--accent);border-radius:50%;vertical-align:-2px;margin-right:7px;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+@media(min-width:650px){.shell{padding-left:24px;padding-right:24px}.locate-card{display:grid;grid-template-columns:1fr auto;align-items:center;gap:14px}.locate-btn{width:auto;min-width:220px;margin-top:0}.filter-grid{grid-template-columns:1fr 1fr}.list{grid-template-columns:1fr 1fr}.item{display:flex;flex-direction:column}.inspection{margin-top:auto}.header{padding-top:20px}.toolbar{top:0}}
+@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="header">
+    <div class="brand"><span class="dot"></span> Toronto DineSafe</div>
+    <h1>Fresh inspections near you</h1>
+    <p class="intro">See the newest food-safety inspections around your current location. Your coordinates stay in this browser.</p>
+  </header>
+
+  <section class="locate-card" aria-labelledby="loc-heading">
+    <div class="locate-row">
+      <div class="loc-icon" aria-hidden="true">⌖</div>
+      <div class="loc-copy">
+        <div class="loc-title" id="loc-heading">Current location</div>
+        <div class="loc-sub" id="loc-sub">Location not used yet</div>
+      </div>
+    </div>
+    <button class="locate-btn" id="locate">Use my location</button>
+  </section>
+
+  <div class="toolbar" aria-label="Result controls">
+    <div class="toolbar-inner">
+      <button class="chip" data-sort="newest" aria-pressed="true">Newest</button>
+      <button class="chip" data-sort="closest" aria-pressed="false">Closest</button>
+      <button class="filter-toggle" id="filterToggle" aria-expanded="false" aria-controls="filters">Filters <span class="count" id="filterCount">0</span></button>
+    </div>
+  </div>
+
+  <section class="filters" id="filters" aria-label="Filters">
+    <div class="filter-grid">
+      <div class="field"><label for="radius">Distance</label><select id="radius"><option value="0.5">Within 500 m</option><option value="1">Within 1 km</option><option value="2" selected>Within 2 km</option><option value="5">Within 5 km</option><option value="10">Within 10 km</option></select></div>
+      <div class="field"><label for="age">Inspected</label><select id="age"><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last year</option><option value="99999">Any date</option></select></div>
+    </div>
+    <label class="checkrow"><input type="checkbox" id="foodOnly" checked><span>Restaurants, cafés, bars and takeout only</span></label>
+  </section>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="results-head">
+    <h2>Nearby</h2>
+    <div class="summary" id="summary">Use your location to begin</div>
+  </div>
+  <section class="list" id="results" aria-live="polite"><div class="empty">Your nearby inspections will appear here.</div></section>
+
+  <p class="footer">Source: City of Toronto Open Data, DineSafe. Multiple infraction rows are grouped to each establishment’s latest inspection. Distance is straight-line, not walking distance.</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const API = 'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe';
+  const FALLBACK_CSV = 'https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/b6b4f3fb-2e2c-47e7-931d-b87d22806948/resource/af0f5b8a-4b73-4a50-8781-65e949792b40/download/dinesafe.csv';
+  const $ = id => document.getElementById(id);
+  const ui = {locate:$('locate'),locSub:$('loc-sub'),radius:$('radius'),age:$('age'),foodOnly:$('foodOnly'),status:$('status'),summary:$('summary'),results:$('results'),filters:$('filters'),filterToggle:$('filterToggle'),filterCount:$('filterCount')};
+  let coords = null, establishments = null, sortMode = 'newest';
+
+  function status(msg, isError=false){ui.status.className='status show'+(isError?' error':'');ui.status.innerHTML=msg;}
+  function clearStatus(){ui.status.className='status';ui.status.textContent='';}
+  function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function normKey(k){return String(k).toUpperCase().replace(/[^A-Z0-9]/g,'');}
+  function get(row, aliases){const map={};for(const k of Object.keys(row))map[normKey(k)]=row[k];for(const a of aliases){const v=map[normKey(a)];if(v!==undefined&&v!==null&&String(v).trim()!=='')return String(v).trim();}return '';}
+  function parseNum(v){if(!v)return NaN;const n=Number(String(v).replace(/[()\[\]]/g,'').trim());return Number.isFinite(n)?n:NaN;}
+  function parseDate(v){if(!v)return null;const s=String(v).trim();let d=new Date(s);if(Number.isNaN(d.getTime())){const m=s.match(/(\d{4})[-\/]?(\d{2})[-\/]?(\d{2})/);if(m)d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));}return d&&!Number.isNaN(d.getTime())?d:null;}
+  function hav(lat1,lon1,lat2,lon2){const R=6371,rad=Math.PI/180,dLat=(lat2-lat1)*rad,dLon=(lon2-lon1)*rad;const a=Math.sin(dLat/2)**2+Math.cos(lat1*rad)*Math.cos(lat2*rad)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(a));}
+  function parseCSV(text){const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i];if(q){if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}else if(c==='"')q=false;else cell+=c;}else{if(c==='"')q=true;else if(c===','){row.push(cell);cell='';}else if(c==='\n'){row.push(cell.replace(/\r$/,''));rows.push(row);row=[];cell='';}else cell+=c;}}if(cell.length||row.length){row.push(cell);rows.push(row);}if(!rows.length)return[];const headers=rows.shift().map(h=>h.trim());return rows.filter(r=>r.some(v=>String(v).trim())).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??''])));}
+
+  async function getCsvUrl(){try{const r=await fetch(API,{cache:'no-store'});if(!r.ok)throw new Error('metadata '+r.status);const j=await r.json();const res=(j.result?.resources||[]).filter(x=>String(x.format||'').toUpperCase()==='CSV');const preferred=res.find(x=>/dinesafe\.csv/i.test(x.url||''))||res.find(x=>x.url);if(preferred?.url)return preferred.url;}catch(e){console.warn('Using fallback DineSafe CSV URL',e);}return FALLBACK_CSV;}
+
+  async function loadData(){if(establishments)return establishments;status('<span class="spinner"></span>Loading current DineSafe inspections…');const url=await getCsvUrl();const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error('DineSafe download failed ('+r.status+')');const rows=parseCSV(await r.text());if(!rows.length)throw new Error('The DineSafe file was empty.');
+    const byId=new Map();
+    for(const row of rows){
+      const id=get(row,['ESTABLISHMENT_ID','ESTABLISHMENTID','ID']);
+      const name=get(row,['ESTABLISHMENT_NAME','ESTABLISHMENTNAME','NAME']);
+      if(!id&&!name)continue;
+      const address=get(row,['ESTABLISHMENT_ADDRESS','ESTABLISHMENTADDRESS','ADDRESS']);
+      const type=get(row,['ESTABLISHMENT_TYPE','ESTABLISHMENTTYPE','TYPE']);
+      const date=parseDate(get(row,['INSPECTION_DATE','INSPECTIONDATE','DATE']));
+      const inspectionId=get(row,['INSPECTION_ID','INSPECTIONID']);
+      const result=get(row,['ESTABLISHMENT_STATUS','ESTABLISHMENTSTATUS','STATUS','INSPECTION_STATUS','INSPECTIONSTATUS']);
+      const lat=parseNum(get(row,['LATITUDE','LAT'])), lon=parseNum(get(row,['LONGITUDE','LON','LNG']));
+      const key=id||name+'|'+address;
+      let e=byId.get(key);
+      if(!e){e={id,name,address,type,lat,lon,date,result,inspectionId};byId.set(key,e);}
+      const newer=date&&(!e.date||date>e.date);if(newer){e.date=date;e.result=result;e.inspectionId=inspectionId||e.inspectionId;}
+      if((!Number.isFinite(e.lat)||!Number.isFinite(e.lon))&&Number.isFinite(lat)&&Number.isFinite(lon)){e.lat=lat;e.lon=lon;}
+    }
+    establishments=[...byId.values()].filter(e=>Number.isFinite(e.lat)&&Number.isFinite(e.lon)&&e.date);
+    if(!establishments.length)throw new Error('The current DineSafe file did not expose usable coordinates.');
+    clearStatus();return establishments;
+  }
+
+  function isRestaurantish(type){return /(restaurant|food take.?out|cafe|caf[eé]|coffee|bar|pub|tavern|food court|bakery|eating|drinking)/i.test(type||'');}
+  function fmtDate(d){return new Intl.DateTimeFormat('en-CA',{month:'short',day:'numeric'}).format(d);}
+  function ageDays(d){return Math.max(0,Math.floor((Date.now()-d.getTime())/86400000));}
+  function ageLabel(days){if(days===0)return'Today';if(days===1)return'Yesterday';return days+' days ago';}
+  function statusClass(s){s=(s||'').toLowerCase();if(s.includes('conditional'))return'conditional';if(s.includes('closed')||s.includes('close'))return'closed';return'pass';}
+  function updateFilterCount(){let n=0;if(ui.radius.value!=='2')n++;if(ui.age.value!=='90')n++;if(!ui.foodOnly.checked)n++;ui.filterCount.textContent=n;ui.filterCount.classList.toggle('show',n>0);}
+
+  function render(){updateFilterCount();if(!coords||!establishments)return;const radius=Number(ui.radius.value),maxAge=Number(ui.age.value),only=ui.foodOnly.checked;
+    let arr=establishments.map(e=>({...e,distance:hav(coords.lat,coords.lon,e.lat,e.lon),days:ageDays(e.date)})).filter(e=>e.distance<=radius&&e.days<=maxAge&&(!only||isRestaurantish(e.type)));
+    if(sortMode==='closest')arr.sort((a,b)=>a.distance-b.distance||b.date-a.date);else arr.sort((a,b)=>b.date-a.date||a.distance-b.distance);
+    const shown=arr.slice(0,50);ui.summary.textContent=arr.length?`${arr.length.toLocaleString()} found · showing ${shown.length}`:'No matches';
+    if(!shown.length){ui.results.innerHTML='<div class="empty">No places match these filters. Try a larger distance or older inspection window.</div>';return;}
+    ui.results.innerHTML=shown.map((e,i)=>{const ds=e.distance<1?Math.round(e.distance*1000)+' m':e.distance.toFixed(1)+' km';const map='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(e.name+' '+e.address+', Toronto');const dine='https://www.toronto.ca/community-people/health-wellness-care/health-programs-advice/food-safety/dinesafe/';const cls=statusClass(e.result);return `<article class="item"><div class="topline"><div class="rank">${i+1}</div><div class="maincopy"><h3>${esc(e.name)}</h3><div class="address">${esc(e.address)}</div></div><div class="distance">${ds}<small>away</small></div></div><div class="inspection"><div class="datebox"><strong>${fmtDate(e.date)}</strong><span>${ageLabel(e.days)}</span></div><div class="inspection-copy"><div class="statusline ${cls}">${esc(e.result||'Inspection recorded')}</div><div class="type">${esc(e.type||'Food premises')}</div></div></div><div class="actions"><a class="action primary" href="${map}" target="_blank" rel="noopener">Open in Maps</a><a class="action" href="${dine}" target="_blank" rel="noopener">DineSafe</a></div></article>`;}).join('');
+  }
+
+  async function run(){if(!navigator.geolocation){status('This browser does not support geolocation.',true);return;}ui.locate.disabled=true;ui.locate.textContent='Finding location…';clearStatus();navigator.geolocation.getCurrentPosition(async pos=>{coords={lat:pos.coords.latitude,lon:pos.coords.longitude};ui.locSub.textContent=`Located · about ${Math.round(pos.coords.accuracy)} m accuracy`;ui.locate.textContent='Refresh location';try{await loadData();render();}catch(e){console.error(e);status(esc(e.message)+' Serve this page over HTTPS or localhost.',true);}finally{ui.locate.disabled=false;}},err=>{status(err.code===1?'Location permission was denied. Enable location access for this site and try again.':'Could not determine your location: '+esc(err.message),true);ui.locate.disabled=false;ui.locate.textContent='Try again';},{enableHighAccuracy:true,timeout:12000,maximumAge:60000});}
+
+  ui.locate.addEventListener('click',run);
+  document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{sortMode=btn.dataset.sort;document.querySelectorAll('[data-sort]').forEach(b=>b.setAttribute('aria-pressed',String(b===btn)));render();}));
+  ui.filterToggle.addEventListener('click',()=>{const open=!ui.filters.classList.contains('open');ui.filters.classList.toggle('open',open);ui.filterToggle.setAttribute('aria-expanded',String(open));});
+  [ui.radius,ui.age,ui.foodOnly].forEach(el=>el.addEventListener('change',render));
+  updateFilterCount();
+})();
+</script>
+</body>
+</html>
