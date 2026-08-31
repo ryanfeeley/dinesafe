@@ -31,8 +31,7 @@ jobs:
           API = 'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe'
           HEADERS = {'User-Agent': 'ryanfeeley/dinesafe GitHub Action (+https://dinesafe.ryanfeeley.com)'}
 
-          req = urllib.request.Request(API, headers=HEADERS)
-          with urllib.request.urlopen(req, timeout=60) as r:
+          with urllib.request.urlopen(urllib.request.Request(API, headers=HEADERS), timeout=60) as r:
               package = json.load(r)['result']
 
           resources = [x for x in package.get('resources', []) if str(x.get('format', '')).upper() == 'CSV' and x.get('url')]
@@ -40,41 +39,57 @@ jobs:
               raise SystemExit('No CSV resource found in Toronto DineSafe package')
 
           resource = next((x for x in resources if 'dinesafe.csv' in x['url'].lower()), resources[0])
-          req = urllib.request.Request(resource['url'], headers=HEADERS)
-          with urllib.request.urlopen(req, timeout=120) as r:
+          with urllib.request.urlopen(urllib.request.Request(resource['url'], headers=HEADERS), timeout=120) as r:
               text = r.read().decode('utf-8-sig')
 
           reader = csv.DictReader(io.StringIO(text))
           if not reader.fieldnames:
               raise SystemExit('Toronto DineSafe CSV has no header row')
 
-          normalized_headers = {re.sub(r'[^a-z0-9]', '', h.lower()) for h in reader.fieldnames if h}
-          required_groups = [
-              {'estid','establishmentid','oldestid'},
-              {'estname','establishmentname','name'},
-              {'inspectiondate','date'},
-              {'inspectionstatus','establishmentstatus','status'},
-              {'latitude','lat'},
-              {'longitude','lon','lng'},
-          ]
-          for group in required_groups:
-              if not (group & normalized_headers):
-                  raise SystemExit(f'Toronto schema changed; missing one of {sorted(group)}. Headers: {reader.fieldnames}')
+          print('Toronto headers:', reader.fieldnames)
+
+          def norm_key(s):
+              return re.sub(r'[^a-z0-9]', '', (s or '').lower())
 
           def pick(row, *names):
-              norm = {re.sub(r'[^a-z0-9]', '', k.lower()): (v or '').strip() for k, v in row.items() if k}
+              norm = {norm_key(k): (v or '').strip() for k, v in row.items() if k}
               for name in names:
-                  v = norm.get(re.sub(r'[^a-z0-9]', '', name.lower()), '')
+                  v = norm.get(norm_key(name), '')
                   if v:
                       return v
               return ''
 
+          def norm_text(s):
+              return re.sub(r'[^a-z0-9]+', ' ', (s or '').lower()).strip()
+
           non_dining = re.compile(r'\b(child\s*care|day\s*care|montessori|nursery|school|academy|college|university|student\s+nutrition|hospital|health\s*(service|centre|center)|long[\s-]*term\s+care|nursing\s+home|retirement|seniors?|shelter|food\s+bank|community\s+(centre|center|kitchen)|recreation\s+(centre|center)|ymca|ywca|church|mosque|synagogue|temple|congregation|parish|supermarket|grocery|convenience|variety\s+store|food\s+store|pharmacy|drug\s*mart|butcher|meat\s+(market|shop)|fish\s+market|produce\s+market|warehouse|wholesale|manufactur|commissary|caterer|catering|vending|correctional|detention|group\s+home)\b', re.I)
 
-          source_rows = 0
-          latest = {}
-          inspection_events = defaultdict(set)
+          # Union-find lets the new ID, legacy ID and unchanged name/address all
+          # contribute to one establishment history instead of fragmenting it.
+          parent = {}
+          rank = {}
+          def add(x):
+              if x not in parent:
+                  parent[x] = x
+                  rank[x] = 0
+          def find(x):
+              add(x)
+              while parent[x] != x:
+                  parent[x] = parent[parent[x]]
+                  x = parent[x]
+              return x
+          def union(a, b):
+              ra, rb = find(a), find(b)
+              if ra == rb:
+                  return
+              if rank[ra] < rank[rb]:
+                  ra, rb = rb, ra
+              parent[rb] = ra
+              if rank[ra] == rank[rb]:
+                  rank[ra] += 1
 
+          parsed_rows = []
+          source_rows = 0
           for row in reader:
               source_rows += 1
               est_id = pick(row, 'estId', 'establishment_id', 'establishmentId')
@@ -83,9 +98,10 @@ jobs:
               address = pick(row, 'address', 'establishment_address', 'establishmentAddress')
               date = pick(row, 'inspectionDate', 'inspection_date', 'date')
               status = pick(row, 'inspectionStatus', 'inspection_status', 'establishmentStatus', 'status')
+              inspection_id = pick(row, 'inspectionId', 'inspection_id')
               lat = pick(row, 'latitude', 'lat')
               lon = pick(row, 'longitude', 'lon', 'lng')
-              if not (name and date and lat and lon):
+              if not (name and address and date and lat and lon):
                   continue
               try:
                   parsed = datetime.fromisoformat(date[:10]).replace(tzinfo=timezone.utc)
@@ -95,31 +111,63 @@ jobs:
               if not (43.4 <= latf <= 44.0 and -80.0 <= lonf <= -78.8):
                   continue
 
-              key = est_id or old_id or f'{name}|{address}'
-              inspection_events[key].add((parsed.date().isoformat(), status.strip().lower()))
+              tokens = []
+              if est_id:
+                  tokens.append('new:' + est_id)
+              if old_id:
+                  tokens.append('old:' + old_id)
+              # This conservative bridge catches ID migrations where the name
+              # and address stayed the same. False negatives are preferable to
+              # showing a longstanding business as new.
+              tokens.append('nameaddr:' + norm_text(name) + '|' + norm_text(address))
+              for token in tokens:
+                  add(token)
+              for token in tokens[1:]:
+                  union(tokens[0], token)
 
-              prev = latest.get(key)
-              if prev is None or parsed > prev['_date']:
-                  dining = 0 if non_dining.search(f'{name} {address}') else 1
-                  latest[key] = {
-                      '_date': parsed,
-                      '_key': key,
-                      'ESTABLISHMENT_ID': est_id or old_id,
-                      'OLD_ESTABLISHMENT_ID': old_id,
-                      'ESTABLISHMENT_NAME': name,
-                      'ESTABLISHMENT_ADDRESS': address,
-                      'ESTABLISHMENT_TYPE': 'Dining-focused (derived)' if dining else 'Other food premises',
-                      'DINING': dining,
-                      'INSPECTION_DATE': parsed.date().isoformat(),
-                      'ESTABLISHMENT_STATUS': status,
-                      'LATITUDE': f'{latf:.9f}'.rstrip('0').rstrip('.'),
-                      'LONGITUDE': f'{lonf:.9f}'.rstrip('0').rstrip('.'),
-                  }
+              parsed_rows.append({
+                  'token': tokens[0],
+                  'est_id': est_id,
+                  'old_id': old_id,
+                  'name': name,
+                  'address': address,
+                  'date': parsed,
+                  'status': status,
+                  'inspection_id': inspection_id,
+                  'lat': latf,
+                  'lon': lonf,
+              })
+
+          events = defaultdict(set)
+          latest = {}
+          earliest = {}
+          for row in parsed_rows:
+              root = find(row['token'])
+              event = ('id:' + row['inspection_id']) if row['inspection_id'] else ('date:' + row['date'].date().isoformat() + '|status:' + row['status'].strip().lower())
+              events[root].add(event)
+              if root not in earliest or row['date'] < earliest[root]:
+                  earliest[root] = row['date']
+              if root not in latest or row['date'] > latest[root]['date']:
+                  latest[root] = row
 
           records = []
-          for rec in latest.values():
-              rec['INSPECTION_COUNT'] = len(inspection_events[rec['_key']])
-              records.append(rec)
+          for root, row in latest.items():
+              dining = 0 if non_dining.search(f"{row['name']} {row['address']}") else 1
+              records.append({
+                  '_date': row['date'],
+                  'ESTABLISHMENT_ID': row['est_id'] or row['old_id'],
+                  'OLD_ESTABLISHMENT_ID': row['old_id'],
+                  'ESTABLISHMENT_NAME': row['name'],
+                  'ESTABLISHMENT_ADDRESS': row['address'],
+                  'ESTABLISHMENT_TYPE': 'Dining-focused (derived)' if dining else 'Other food premises',
+                  'DINING': dining,
+                  'INSPECTION_COUNT': len(events[root]),
+                  'FIRST_INSPECTION_DATE': earliest[root].date().isoformat(),
+                  'INSPECTION_DATE': row['date'].date().isoformat(),
+                  'ESTABLISHMENT_STATUS': row['status'],
+                  'LATITUDE': f"{row['lat']:.9f}".rstrip('0').rstrip('.'),
+                  'LONGITUDE': f"{row['lon']:.9f}".rstrip('0').rstrip('.'),
+              })
 
           records.sort(key=lambda x: x['_date'], reverse=True)
           if len(records) < 5000:
@@ -128,83 +176,40 @@ jobs:
           if newest < datetime.now(timezone.utc) - timedelta(days=14):
               raise SystemExit(f'DineSafe source appears stale; newest inspection is {newest.date()}')
 
-          fields = ['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
+          fields = ['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','FIRST_INSPECTION_DATE','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
           with open('data/dinesafe.csv', 'w', encoding='utf-8', newline='') as f:
               writer = csv.DictWriter(f, fieldnames=fields)
               writer.writeheader()
               for rec in records:
                   rec.pop('_date', None)
-                  rec.pop('_key', None)
                   writer.writerow(rec)
 
-          new_count = sum(1 for r in records if int(r['INSPECTION_COUNT']) == 1)
+          new_records = [r for r in records if int(r['INSPECTION_COUNT']) == 1]
           print(f'Source rows: {source_rows}')
-          print(f'Normalized establishments: {len(records)}')
-          print(f'Establishments with exactly one inspection: {new_count}')
+          print(f'Merged establishments: {len(records)}')
+          print(f'Establishments with exactly one inspection in full published history: {len(new_records)}')
+          print(f'Oldest first inspection among one-inspection establishments: {min((r["FIRST_INSPECTION_DATE"] for r in new_records), default="none")}')
           print(f'Newest inspection: {newest.date()}')
           PY
 
           test -s data/dinesafe.csv
           head -n 3 data/dinesafe.csv
 
-      - name: Patch mobile frontend
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-
-          p = Path('index.html')
-          s = p.read_text()
-
-          css = '''
-          .manual-card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;margin:0 0 12px}.manual-card[hidden]{display:none}.manual-title{font-weight:800}.manual-copy{margin:3px 0 10px;color:var(--muted);font-size:.84rem}.manual-row{display:grid;grid-template-columns:1fr;gap:8px}.manual-input{width:100%;min-height:46px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);padding:0 11px}.manual-btn{min-height:46px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font-weight:800;padding:0 14px}.secondary-link{border:0;background:none;color:var(--accent);font-weight:750;padding:0 2px 10px;cursor:pointer}.status button{font:inherit;border:0;background:none;color:inherit;text-decoration:underline;padding:0;cursor:pointer;font-weight:750}.debug{margin:12px 3px 0;color:var(--muted);font-size:.72rem}.debug pre{white-space:pre-wrap;word-break:break-word;font:inherit}.filter-note{color:var(--muted);font-size:.74rem;margin:6px 0 0 30px}@media(min-width:650px){.manual-row{grid-template-columns:1fr auto}}
-          '''
-          if '.manual-card{' not in s:
-              s = s.replace('</style>', css + '</style>')
-
-          manual = '''
-          <section class="manual-card" id="manualCard" hidden aria-labelledby="manual-heading">
-            <div class="manual-title" id="manual-heading">Use an address instead</div>
-            <div class="manual-copy">If iOS blocks location, enter a Toronto address or intersection. You can also paste latitude, longitude.</div>
-            <div class="manual-row"><input class="manual-input" id="manualInput" autocomplete="street-address" inputmode="search" placeholder="e.g. Danforth Ave & Pape Ave"><button class="manual-btn" id="manualGo">Find nearby</button></div>
-          </section>
-          <button class="secondary-link" id="manualToggle" type="button">Use an address instead</button>
-          '''
-          if 'id="manualCard"' not in s:
-              marker = '</section>\n\n  <div class="toolbar"'
-              s = s.replace(marker, '</section>\n' + manual + '\n  <div class="toolbar"', 1)
-
-          s = s.replace('Fresh inspections near you', 'New food establishments near you')
-          s = s.replace('See the newest food-safety inspections around your current location. Your coordinates stay in this browser.', 'See nearby establishments with exactly one recorded DineSafe inspection. Your coordinates stay in this browser.')
-          s = s.replace('Dining-focused places only', 'Dining-focused places only')
-          if 'Toronto’s current 2026 feed no longer exposes establishment type.' not in s:
-              s = s.replace('</label>\n  </section>', '</label>\n    <p class="filter-note">Toronto’s current 2026 feed no longer exposes establishment type. This filter conservatively excludes obvious schools, child care, institutions, grocery/retail and similar premises.</p>\n  </section>', 1)
-
-          if 'id="debugText"' not in s:
-              s = s.replace('</main>', '  <details class="debug"><summary>Location diagnostics</summary><pre id="debugText"></pre></details>\n</main>')
-
-          s = re.sub(r'<script>.*?</script>', '<script src="./app.js"></script>', s, flags=re.S)
-          p.write_text(s)
-          PY
-
-      - name: Validate frontend syntax
+      - name: Validate site data
         shell: bash
         run: |
           node --check app.js
-          grep -q 'manualCard' index.html
-          grep -q 'script src="./app.js"' index.html
-          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID,ESTABLISHMENT_NAME,ESTABLISHMENT_ADDRESS,ESTABLISHMENT_TYPE,DINING,INSPECTION_COUNT' data/dinesafe.csv
+          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID,ESTABLISHMENT_NAME,ESTABLISHMENT_ADDRESS,ESTABLISHMENT_TYPE,DINING,INSPECTION_COUNT,FIRST_INSPECTION_DATE' data/dinesafe.csv
 
-      - name: Commit updated site data
+      - name: Commit updated data
         shell: bash
         run: |
-          if git diff --quiet -- index.html data/dinesafe.csv; then
-            echo "DineSafe data and frontend are unchanged."
+          if git diff --quiet -- data/dinesafe.csv; then
+            echo "DineSafe data is unchanged."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html data/dinesafe.csv
-          git commit -m "Update DineSafe data with inspection counts"
+          git add data/dinesafe.csv
+          git commit -m "Merge DineSafe establishment histories"
           git push
