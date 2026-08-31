@@ -101,7 +101,6 @@ jobs:
           for filename in hist_zip.namelist():
               if not filename.lower().endswith('.csv'): continue
               raw=hist_zip.read(filename).decode('utf-8-sig',errors='replace')
-              # Some 2020–2022 files contain an extra leading quote before the header.
               if raw.startswith('""Rec #"'): raw=raw[1:]
               reader=csv.DictReader(io.StringIO(raw))
               for row in reader:
@@ -128,7 +127,6 @@ jobs:
               est_id=pick(m,'estId','establishment_id','establishmentId')
               old_id=pick(m,'oldEstId','old_establishment_id')
               name=pick(m,'estName','establishment_name','establishmentName','name')
-              typ=pick(m,'typeDesc','establishmentType','type')
               address=pick(m,'address','establishment_address','establishmentAddress')
               date=parse_date(pick(m,'inspectionDate','inspection_date','date'))
               status=pick(m,'inspectionStatus','inspection_status','establishmentStatus','status')
@@ -142,7 +140,7 @@ jobs:
               if old_id: tokens.append(f'legacy:{old_id}')
               tokens.extend([f'nameaddr:{norm_name(name)}|{norm_address(address)}',geo_token(name,lat,lon)])
               token=link(tokens)
-              all_rows.append({'source':'current','token':token,'est_id':est_id,'old_id':old_id,'date':date,'status':status,'name':name,'type':typ,'address':re.sub(r'\s+',' ',re.sub(r'\bNone\b',' ',address,flags=re.I)).strip(),'lat':latf,'lon':lonf})
+              all_rows.append({'source':'current','token':token,'est_id':est_id,'old_id':old_id,'date':date,'status':status,'name':name,'address':re.sub(r'\s+',' ',re.sub(r'\bNone\b',' ',address,flags=re.I)).strip(),'lat':latf,'lon':lonf})
               current_rows+=1
 
           hist_ids=defaultdict(set)
@@ -150,35 +148,50 @@ jobs:
           current_pairs=defaultdict(set)
           earliest={}
           latest_current={}
+          latest_hist_type={}
           for row in all_rows:
               root=find(row['token'])
               pair=(row['date'].date().isoformat(),(row['status'] or '').strip().lower())
               if row['source']=='hist':
                   if row.get('inspection_id'): hist_ids[root].add(row['inspection_id'])
-                  else: hist_pairs[root].add(pair)
                   hist_pairs[root].add(pair)
+                  if row.get('type') and (root not in latest_hist_type or row['date']>latest_hist_type[root][0]):
+                      latest_hist_type[root]=(row['date'],row['type'])
               else:
                   current_pairs[root].add(pair)
                   if root not in latest_current or row['date']>latest_current[root]['date']:
                       latest_current[root]=row
               if root not in earliest or row['date']<earliest[root]: earliest[root]=row['date']
 
-          dining_re=re.compile(r'(restaurant|food\s*take\s*out|cafe|café|coffee|cocktail\s*bar|beverage\s*room|bar\b|pub\b|tavern)',re.I)
+          dining_type_re=re.compile(r'(restaurant|food\s*take\s*out|cafe|café|coffee|cocktail\s*bar|beverage\s*room|bar\b|pub\b|tavern)',re.I)
+          non_dining_name_re=re.compile(r'\b(child\s*care|day\s*care|montessori|nursery|school|academy|college|university|student|hospital|health\s*(service|centre|center)|medical|clinic|long[\s-]*term\s+care|nursing|retirement|seniors?|shelter|food\s+bank|community\s+(centre|center|kitchen)|recreation\s+(centre|center)|ymca|ywca|church|mosque|synagogue|temple|congregation|parish|supermarket|grocery|convenience|variety\s+store|food\s+store|pharmacy|drug\s*mart|butcher|meat\s+(market|shop)|fish\s+market|produce\s+market|warehouse|wholesale|manufactur|commissary|caterer|catering|vending|correctional|detention|group\s+home|residence|clubhouse|arena|stadium|school\s+nutrition)\b',re.I)
+
           records=[]
           for root,row in latest_current.items():
-              # Historical inspections have stable inspection IDs. Current-feed
-              # inspections that overlap 2023 history are not counted twice.
               count=len(hist_ids[root])
               if not hist_ids[root]: count+=len(hist_pairs[root])
               count+=len(current_pairs[root]-hist_pairs[root])
-              dining=1 if dining_re.search(row.get('type','')) else 0
+
+              hist_type=latest_hist_type.get(root,(None,''))[1]
+              if hist_type:
+                  dining=1 if dining_type_re.search(hist_type) else 0
+                  display_type=hist_type
+              else:
+                  # The current 2024+ feed no longer exposes establishment type.
+                  # For genuinely new IDs, default to dining unless the name is
+                  # clearly an institutional/retail/non-dining premise. This is
+                  # deliberately recall-oriented for new restaurants with names
+                  # that do not include words such as “restaurant” or “cafe”.
+                  dining=0 if non_dining_name_re.search(row['name']) else 1
+                  display_type='Dining-focused (type unavailable)' if dining else 'Other food premises (derived)'
+
               records.append({
                   '_date':row['date'],
                   'ESTABLISHMENT_ID':row['est_id'],
                   'OLD_ESTABLISHMENT_ID':row.get('old_id',''),
                   'ESTABLISHMENT_NAME':row['name'],
                   'ESTABLISHMENT_ADDRESS':row['address'],
-                  'ESTABLISHMENT_TYPE':row.get('type') or 'Food premises',
+                  'ESTABLISHMENT_TYPE':display_type,
                   'DINING':dining,
                   'INSPECTION_COUNT':count,
                   'FIRST_INSPECTION_DATE':earliest[root].date().isoformat(),
@@ -200,14 +213,16 @@ jobs:
                   rec.pop('_date',None);w.writerow(rec)
 
           new=[r for r in records if int(r['INSPECTION_COUNT'])==1]
+          dining_new=[r for r in new if int(r['DINING'])==1]
           print('Historical source rows:',historical_rows)
           print('Current source rows:',current_rows)
           print('Current establishments:',len(records))
           print('Exactly one inspection across 2001-present:',len(new))
-          print('Oldest first inspection among one-inspection establishments:',min((r['FIRST_INSPECTION_DATE'] for r in new),default='none'))
-          print('Dining-focused one-inspection establishments:',sum(int(r['DINING']) for r in new))
+          print('Dining-focused one-inspection establishments:',len(dining_new))
+          print('Oldest first inspection among dining one-inspection establishments:',min((r['FIRST_INSPECTION_DATE'] for r in dining_new),default='none'))
           print('Newest current inspection:',newest.date())
-          print('Top current types:',Counter(r['ESTABLISHMENT_TYPE'] for r in records).most_common(15))
+          print('Top dining-new examples:',[(r['ESTABLISHMENT_NAME'],r['ESTABLISHMENT_TYPE'],r['FIRST_INSPECTION_DATE']) for r in dining_new[:20]])
+          print('Historical type coverage for current establishments:',sum(1 for root in latest_current if root in latest_hist_type))
           PY
 
           test -s data/dinesafe.csv
@@ -229,5 +244,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/dinesafe.csv
-          git commit -m "Use full DineSafe inspection history"
+          git commit -m "Fix dining classification for new establishments"
           git push
