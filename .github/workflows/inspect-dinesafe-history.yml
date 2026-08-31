@@ -13,29 +13,22 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Toronto resources and historical archive
+      - name: Inspect Toronto current CSV resources
         shell: bash
         run: |
           python3 - <<'PY'
-          import json, urllib.request, zipfile, io
+          import csv, io, json, urllib.request
           API='https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe'
           H={'User-Agent':'ryanfeeley/dinesafe GitHub Action'}
           with urllib.request.urlopen(urllib.request.Request(API,headers=H),timeout=60) as r:
               p=json.load(r)['result']
-          for x in p.get('resources',[]):
-              print('RESOURCE', x.get('name'), '|', x.get('format'), '|', x.get('url'))
-          hist=next((x for x in p.get('resources',[]) if 'histor' in str(x.get('name','')).lower() or 'histor' in str(x.get('url','')).lower()),None)
-          if not hist: raise SystemExit('No historical resource found')
-          with urllib.request.urlopen(urllib.request.Request(hist['url'],headers=H),timeout=180) as r:
-              b=r.read()
-          print('HISTORICAL BYTES',len(b))
-          z=zipfile.ZipFile(io.BytesIO(b))
-          print('ARCHIVE FILES')
-          for n in z.namelist():
-              info=z.getinfo(n)
-              print(n, info.file_size)
-              if n.lower().endswith(('.csv','.txt','.xml')) and info.file_size:
-                  raw=z.read(n)[:1000]
-                  try: print('SAMPLE',raw.decode('utf-8-sig',errors='replace').replace('\n','\\n')[:800])
-                  except Exception: pass
+          csvs=[x for x in p.get('resources',[]) if str(x.get('format','')).upper()=='CSV']
+          for x in csvs:
+              print('\nRESOURCE',repr(x.get('name')),x.get('url'))
+              with urllib.request.urlopen(urllib.request.Request(x['url'],headers=H),timeout=120) as r:
+                  text=r.read().decode('utf-8-sig',errors='replace')
+              rd=csv.DictReader(io.StringIO(text))
+              print('HEADERS',rd.fieldnames)
+              for i,row in zip(range(5),rd):
+                  print('ROW',i,{k:row.get(k) for k in rd.fieldnames})
           PY
