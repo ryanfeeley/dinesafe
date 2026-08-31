@@ -1,0 +1,122 @@
+name: Apply visible controls
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-visible-controls.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Replace controls UI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p = Path('index.html')
+          s = p.read_text()
+
+          css = '''
+          .visible-controls{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;margin:4px 0 14px;box-shadow:var(--shadow)}
+          .visible-controls-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+          .visible-controls .sort-field{grid-column:1/-1}
+          .visible-controls .field label{display:block;margin:0 0 5px;font-size:.76rem;color:var(--muted);font-weight:760}
+          .visible-controls .field select{width:100%;min-height:46px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);padding:0 34px 0 11px}
+          .internal-controls{display:none!important}
+          @media(min-width:650px){.visible-controls-grid{grid-template-columns:1fr 1fr 1fr}.visible-controls .sort-field{grid-column:auto}}
+          '''
+          if '.visible-controls{' not in s:
+              s = s.replace('</style>', css + '</style>')
+
+          controls = '''
+          <section class="visible-controls" aria-label="Result controls">
+            <div class="visible-controls-grid">
+              <div class="field sort-field">
+                <label for="sort">Sort</label>
+                <select id="sort">
+                  <option value="newest" selected>Newest first</option>
+                  <option value="closest">Closest first</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="radius">Distance</label>
+                <select id="radius">
+                  <option value="0.5">Within 500 m</option>
+                  <option value="1">Within 1 km</option>
+                  <option value="2" selected>Within 2 km</option>
+                  <option value="5">Within 5 km</option>
+                  <option value="10">Within 10 km</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="age">Inspected</label>
+                <select id="age">
+                  <option value="14">Last 14 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="90" selected>Last 90 days</option>
+                  <option value="365">Last year</option>
+                  <option value="99999">Any date</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <div class="internal-controls" aria-hidden="true">
+            <button class="chip" data-sort="newest" aria-pressed="true" tabindex="-1">Newest</button>
+            <button class="chip" data-sort="closest" aria-pressed="false" tabindex="-1">Closest</button>
+            <button class="filter-toggle" id="filterToggle" aria-expanded="false" aria-controls="filters" tabindex="-1">Filters <span class="count" id="filterCount">0</span></button>
+            <section class="filters" id="filters">
+              <input type="checkbox" id="foodOnly" checked tabindex="-1">
+            </section>
+          </div>
+          '''
+
+          pattern = re.compile(r'\n\s*<div class="toolbar" aria-label="Result controls">.*?</section>\s*', re.S)
+          s, n = pattern.subn('\n' + controls + '\n', s, count=1)
+          if n != 1:
+              raise SystemExit('Could not find the existing toolbar/filter block')
+
+          sync = '''
+          <script>
+          (() => {
+            const sort = document.getElementById('sort');
+            sort?.addEventListener('change', () => {
+              document.querySelector(`[data-sort="${sort.value}"]`)?.click();
+            });
+          })();
+          </script>
+          '''
+          if "const sort = document.getElementById('sort');" not in s:
+              s = s.replace('<script src="./app.js"></script>', '<script src="./app.js"></script>\n' + sync)
+
+          p.write_text(s)
+          PY
+
+      - name: Validate result
+        shell: bash
+        run: |
+          grep -q 'id="sort"' index.html
+          grep -q 'id="radius"' index.html
+          grep -q 'id="age"' index.html
+          grep -q 'id="foodOnly" checked' index.html
+          grep -q 'internal-controls' index.html
+          test "$(grep -o 'id="radius"' index.html | wc -l)" -eq 1
+          test "$(grep -o 'id="age"' index.html | wc -l)" -eq 1
+
+      - name: Commit UI
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Expose sort and filters directly"
+          git push
