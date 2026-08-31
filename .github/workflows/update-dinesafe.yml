@@ -25,6 +25,7 @@ jobs:
           mkdir -p data
           python3 - <<'PY'
           import csv, io, json, re, urllib.request
+          from collections import defaultdict
           from datetime import datetime, timezone, timedelta
 
           API = 'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe'
@@ -70,8 +71,10 @@ jobs:
 
           non_dining = re.compile(r'\b(child\s*care|day\s*care|montessori|nursery|school|academy|college|university|student\s+nutrition|hospital|health\s*(service|centre|center)|long[\s-]*term\s+care|nursing\s+home|retirement|seniors?|shelter|food\s+bank|community\s+(centre|center|kitchen)|recreation\s+(centre|center)|ymca|ywca|church|mosque|synagogue|temple|congregation|parish|supermarket|grocery|convenience|variety\s+store|food\s+store|pharmacy|drug\s*mart|butcher|meat\s+(market|shop)|fish\s+market|produce\s+market|warehouse|wholesale|manufactur|commissary|caterer|catering|vending|correctional|detention|group\s+home)\b', re.I)
 
-          latest = {}
           source_rows = 0
+          latest = {}
+          inspection_events = defaultdict(set)
+
           for row in reader:
               source_rows += 1
               est_id = pick(row, 'estId', 'establishment_id', 'establishmentId')
@@ -91,12 +94,16 @@ jobs:
                   continue
               if not (43.4 <= latf <= 44.0 and -80.0 <= lonf <= -78.8):
                   continue
+
               key = est_id or old_id or f'{name}|{address}'
+              inspection_events[key].add((parsed.date().isoformat(), status.strip().lower()))
+
               prev = latest.get(key)
               if prev is None or parsed > prev['_date']:
                   dining = 0 if non_dining.search(f'{name} {address}') else 1
                   latest[key] = {
                       '_date': parsed,
+                      '_key': key,
                       'ESTABLISHMENT_ID': est_id or old_id,
                       'OLD_ESTABLISHMENT_ID': old_id,
                       'ESTABLISHMENT_NAME': name,
@@ -109,24 +116,31 @@ jobs:
                       'LONGITUDE': f'{lonf:.9f}'.rstrip('0').rstrip('.'),
                   }
 
-          records = sorted(latest.values(), key=lambda x: x['_date'], reverse=True)
+          records = []
+          for rec in latest.values():
+              rec['INSPECTION_COUNT'] = len(inspection_events[rec['_key']])
+              records.append(rec)
+
+          records.sort(key=lambda x: x['_date'], reverse=True)
           if len(records) < 5000:
               raise SystemExit(f'Normalization produced only {len(records)} establishments from {source_rows} source rows')
           newest = records[0]['_date']
           if newest < datetime.now(timezone.utc) - timedelta(days=14):
               raise SystemExit(f'DineSafe source appears stale; newest inspection is {newest.date()}')
 
-          fields = ['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
+          fields = ['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
           with open('data/dinesafe.csv', 'w', encoding='utf-8', newline='') as f:
               writer = csv.DictWriter(f, fieldnames=fields)
               writer.writeheader()
               for rec in records:
                   rec.pop('_date', None)
+                  rec.pop('_key', None)
                   writer.writerow(rec)
 
+          new_count = sum(1 for r in records if int(r['INSPECTION_COUNT']) == 1)
           print(f'Source rows: {source_rows}')
           print(f'Normalized establishments: {len(records)}')
-          print(f'Dining-focused: {sum(int(r["DINING"]) for r in records)}')
+          print(f'Establishments with exactly one inspection: {new_count}')
           print(f'Newest inspection: {newest.date()}')
           PY
 
@@ -161,7 +175,9 @@ jobs:
               marker = '</section>\n\n  <div class="toolbar"'
               s = s.replace(marker, '</section>\n' + manual + '\n  <div class="toolbar"', 1)
 
-          s = s.replace('Restaurants, cafés, bars and takeout only', 'Dining-focused places only')
+          s = s.replace('Fresh inspections near you', 'New food establishments near you')
+          s = s.replace('See the newest food-safety inspections around your current location. Your coordinates stay in this browser.', 'See nearby establishments with exactly one recorded DineSafe inspection. Your coordinates stay in this browser.')
+          s = s.replace('Dining-focused places only', 'Dining-focused places only')
           if 'Toronto’s current 2026 feed no longer exposes establishment type.' not in s:
               s = s.replace('</label>\n  </section>', '</label>\n    <p class="filter-note">Toronto’s current 2026 feed no longer exposes establishment type. This filter conservatively excludes obvious schools, child care, institutions, grocery/retail and similar premises.</p>\n  </section>', 1)
 
@@ -178,7 +194,7 @@ jobs:
           node --check app.js
           grep -q 'manualCard' index.html
           grep -q 'script src="./app.js"' index.html
-          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID' data/dinesafe.csv
+          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID,ESTABLISHMENT_NAME,ESTABLISHMENT_ADDRESS,ESTABLISHMENT_TYPE,DINING,INSPECTION_COUNT' data/dinesafe.csv
 
       - name: Commit updated site data
         shell: bash
@@ -190,5 +206,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html data/dinesafe.csv
-          git commit -m "Update DineSafe data and mobile fallback"
+          git commit -m "Update DineSafe data with inspection counts"
           git push
