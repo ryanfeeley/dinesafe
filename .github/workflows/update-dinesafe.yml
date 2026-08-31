@@ -18,178 +18,196 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and normalize latest DineSafe data
+      - name: Build current establishments with full inspection history
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p data
           python3 - <<'PY'
-          import csv, io, json, re, urllib.request
-          from collections import defaultdict
+          import csv, io, json, re, urllib.request, zipfile
+          from collections import defaultdict, Counter
           from datetime import datetime, timezone, timedelta
 
-          API = 'https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe'
-          HEADERS = {'User-Agent': 'ryanfeeley/dinesafe GitHub Action (+https://dinesafe.ryanfeeley.com)'}
+          API='https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=dinesafe'
+          HEADERS={'User-Agent':'ryanfeeley/dinesafe GitHub Action (+https://dinesafe.ryanfeeley.com)'}
+          NULLS={'','none','null','nan','n/a','na','nil'}
 
-          with urllib.request.urlopen(urllib.request.Request(API, headers=HEADERS), timeout=60) as r:
-              package = json.load(r)['result']
+          def download(url, timeout=180):
+              with urllib.request.urlopen(urllib.request.Request(url,headers=HEADERS),timeout=timeout) as r:
+                  return r.read()
 
-          resources = [x for x in package.get('resources', []) if str(x.get('format', '')).upper() == 'CSV' and x.get('url')]
-          if not resources:
-              raise SystemExit('No CSV resource found in Toronto DineSafe package')
+          with urllib.request.urlopen(urllib.request.Request(API,headers=HEADERS),timeout=60) as r:
+              package=json.load(r)['result']
+          resources=package.get('resources',[])
+          current_res=next((x for x in resources if str(x.get('format','')).upper()=='CSV' and str(x.get('name','')).lower()=='dinesafe.csv'),None)
+          hist_res=next((x for x in resources if 'histor' in str(x.get('name','')).lower()),None)
+          if not current_res or not hist_res:
+              raise SystemExit('Could not find current CSV and historical ZIP resources')
 
-          resource = next((x for x in resources if 'dinesafe.csv' in x['url'].lower()), resources[0])
-          with urllib.request.urlopen(urllib.request.Request(resource['url'], headers=HEADERS), timeout=120) as r:
-              text = r.read().decode('utf-8-sig')
-
-          reader = csv.DictReader(io.StringIO(text))
-          if not reader.fieldnames:
-              raise SystemExit('Toronto DineSafe CSV has no header row')
-
-          print('Toronto headers:', reader.fieldnames)
-
-          def norm_key(s):
-              return re.sub(r'[^a-z0-9]', '', (s or '').lower())
-
-          def pick(row, *names):
-              norm = {norm_key(k): (v or '').strip() for k, v in row.items() if k}
+          def clean(v):
+              s=(v or '').strip()
+              return '' if s.lower() in NULLS else s
+          def nk(s): return re.sub(r'[^a-z0-9]','',(s or '').lower())
+          def rowmap(row): return {nk(k): clean(v) for k,v in row.items() if k}
+          def pick(m,*names):
               for name in names:
-                  v = norm.get(norm_key(name), '')
-                  if v:
-                      return v
+                  v=m.get(nk(name),'')
+                  if v: return v
               return ''
+          def parse_date(s):
+              s=clean(s)
+              for fmt in ('%Y-%m-%d','%m/%d/%Y','%Y/%m/%d','%Y-%m-%d %H:%M:%S'):
+                  try: return datetime.strptime(s[:19],fmt).replace(tzinfo=timezone.utc)
+                  except ValueError: pass
+              try: return datetime.fromisoformat(s[:10]).replace(tzinfo=timezone.utc)
+              except ValueError: return None
+          def norm_name(s): return re.sub(r'[^a-z0-9]+',' ',(s or '').lower()).strip()
+          def norm_address(s):
+              s=(s or '').lower()
+              s=re.sub(r'\bnone\b',' ',s)
+              s=re.sub(r'\b[a-z]\d[a-z][ -]?\d[a-z]\d\b',' ',s)
+              s=re.sub(r'\btoronto\b|\bontario\b|\bon\b',' ',s)
+              s=re.sub(r'[^a-z0-9]+',' ',s)
+              return re.sub(r'\s+',' ',s).strip()
+          def geo_token(name,lat,lon):
+              try: return f"namegeo:{norm_name(name)}|{float(lat):.4f}|{float(lon):.4f}"
+              except (TypeError,ValueError): return ''
 
-          def norm_text(s):
-              return re.sub(r'[^a-z0-9]+', ' ', (s or '').lower()).strip()
-
-          non_dining = re.compile(r'\b(child\s*care|day\s*care|montessori|nursery|school|academy|college|university|student\s+nutrition|hospital|health\s*(service|centre|center)|long[\s-]*term\s+care|nursing\s+home|retirement|seniors?|shelter|food\s+bank|community\s+(centre|center|kitchen)|recreation\s+(centre|center)|ymca|ywca|church|mosque|synagogue|temple|congregation|parish|supermarket|grocery|convenience|variety\s+store|food\s+store|pharmacy|drug\s*mart|butcher|meat\s+(market|shop)|fish\s+market|produce\s+market|warehouse|wholesale|manufactur|commissary|caterer|catering|vending|correctional|detention|group\s+home)\b', re.I)
-
-          # Union-find lets the new ID, legacy ID and unchanged name/address all
-          # contribute to one establishment history instead of fragmenting it.
-          parent = {}
-          rank = {}
+          parent={}; rank={}
           def add(x):
-              if x not in parent:
-                  parent[x] = x
-                  rank[x] = 0
+              if x and x not in parent: parent[x]=x; rank[x]=0
           def find(x):
               add(x)
-              while parent[x] != x:
-                  parent[x] = parent[parent[x]]
-                  x = parent[x]
+              while parent[x]!=x:
+                  parent[x]=parent[parent[x]]; x=parent[x]
               return x
-          def union(a, b):
-              ra, rb = find(a), find(b)
-              if ra == rb:
-                  return
-              if rank[ra] < rank[rb]:
-                  ra, rb = rb, ra
-              parent[rb] = ra
-              if rank[ra] == rank[rb]:
-                  rank[ra] += 1
+          def union(a,b):
+              if not a or not b: return
+              ra,rb=find(a),find(b)
+              if ra==rb:return
+              if rank[ra]<rank[rb]:ra,rb=rb,ra
+              parent[rb]=ra
+              if rank[ra]==rank[rb]:rank[ra]+=1
+          def link(tokens):
+              tokens=[x for x in tokens if x]
+              if not tokens:return ''
+              for x in tokens:add(x)
+              for x in tokens[1:]:union(tokens[0],x)
+              return tokens[0]
 
-          parsed_rows = []
-          source_rows = 0
+          all_rows=[]
+          historical_rows=0
+          hist_zip=zipfile.ZipFile(io.BytesIO(download(hist_res['url'])))
+          for filename in hist_zip.namelist():
+              if not filename.lower().endswith('.csv'): continue
+              raw=hist_zip.read(filename).decode('utf-8-sig',errors='replace')
+              # Some 2020–2022 files contain an extra leading quote before the header.
+              if raw.startswith('""Rec #"'): raw=raw[1:]
+              reader=csv.DictReader(io.StringIO(raw))
+              for row in reader:
+                  m=rowmap(row)
+                  legacy=pick(m,'Establishment ID','establishmentId')
+                  insp=pick(m,'Inspection ID','inspectionId')
+                  name=pick(m,'Establishment Name','establishmentName')
+                  typ=pick(m,'Establishment Type','establishmentType')
+                  address=pick(m,'Establishment Address','establishmentAddress')
+                  date=parse_date(pick(m,'Inspection Date','inspectionDate'))
+                  status=pick(m,'Establishment Status','establishmentStatus')
+                  lat=pick(m,'Latitude','lat'); lon=pick(m,'Longitude','lon','lng')
+                  if not (legacy and name and address and date): continue
+                  tokens=[f'legacy:{legacy}',f'nameaddr:{norm_name(name)}|{norm_address(address)}',geo_token(name,lat,lon)]
+                  token=link(tokens)
+                  all_rows.append({'source':'hist','token':token,'inspection_id':insp,'date':date,'status':status,'name':name,'type':typ,'address':address,'lat':lat,'lon':lon})
+                  historical_rows+=1
+
+          current_rows=0
+          current_text=download(current_res['url'],120).decode('utf-8-sig',errors='replace')
+          reader=csv.DictReader(io.StringIO(current_text))
           for row in reader:
-              source_rows += 1
-              est_id = pick(row, 'estId', 'establishment_id', 'establishmentId')
-              old_id = pick(row, 'oldEstId', 'old_establishment_id')
-              name = pick(row, 'estName', 'establishment_name', 'establishmentName', 'name')
-              address = pick(row, 'address', 'establishment_address', 'establishmentAddress')
-              date = pick(row, 'inspectionDate', 'inspection_date', 'date')
-              status = pick(row, 'inspectionStatus', 'inspection_status', 'establishmentStatus', 'status')
-              inspection_id = pick(row, 'inspectionId', 'inspection_id')
-              lat = pick(row, 'latitude', 'lat')
-              lon = pick(row, 'longitude', 'lon', 'lng')
-              if not (name and address and date and lat and lon):
-                  continue
+              m=rowmap(row)
+              est_id=pick(m,'estId','establishment_id','establishmentId')
+              old_id=pick(m,'oldEstId','old_establishment_id')
+              name=pick(m,'estName','establishment_name','establishmentName','name')
+              typ=pick(m,'typeDesc','establishmentType','type')
+              address=pick(m,'address','establishment_address','establishmentAddress')
+              date=parse_date(pick(m,'inspectionDate','inspection_date','date'))
+              status=pick(m,'inspectionStatus','inspection_status','establishmentStatus','status')
+              lat=pick(m,'latitude','lat'); lon=pick(m,'longitude','lon','lng')
+              if not (est_id and name and address and date and lat and lon): continue
               try:
-                  parsed = datetime.fromisoformat(date[:10]).replace(tzinfo=timezone.utc)
-                  latf, lonf = float(lat), float(lon)
-              except ValueError:
-                  continue
-              if not (43.4 <= latf <= 44.0 and -80.0 <= lonf <= -78.8):
-                  continue
+                  latf,lonf=float(lat),float(lon)
+                  if not (43.4<=latf<=44.0 and -80.0<=lonf<=-78.8): continue
+              except ValueError: continue
+              tokens=[f'current:{est_id}']
+              if old_id: tokens.append(f'legacy:{old_id}')
+              tokens.extend([f'nameaddr:{norm_name(name)}|{norm_address(address)}',geo_token(name,lat,lon)])
+              token=link(tokens)
+              all_rows.append({'source':'current','token':token,'est_id':est_id,'old_id':old_id,'date':date,'status':status,'name':name,'type':typ,'address':re.sub(r'\s+',' ',re.sub(r'\bNone\b',' ',address,flags=re.I)).strip(),'lat':latf,'lon':lonf})
+              current_rows+=1
 
-              tokens = []
-              if est_id:
-                  tokens.append('new:' + est_id)
-              if old_id:
-                  tokens.append('old:' + old_id)
-              # This conservative bridge catches ID migrations where the name
-              # and address stayed the same. False negatives are preferable to
-              # showing a longstanding business as new.
-              tokens.append('nameaddr:' + norm_text(name) + '|' + norm_text(address))
-              for token in tokens:
-                  add(token)
-              for token in tokens[1:]:
-                  union(tokens[0], token)
+          hist_ids=defaultdict(set)
+          hist_pairs=defaultdict(set)
+          current_pairs=defaultdict(set)
+          earliest={}
+          latest_current={}
+          for row in all_rows:
+              root=find(row['token'])
+              pair=(row['date'].date().isoformat(),(row['status'] or '').strip().lower())
+              if row['source']=='hist':
+                  if row.get('inspection_id'): hist_ids[root].add(row['inspection_id'])
+                  else: hist_pairs[root].add(pair)
+                  hist_pairs[root].add(pair)
+              else:
+                  current_pairs[root].add(pair)
+                  if root not in latest_current or row['date']>latest_current[root]['date']:
+                      latest_current[root]=row
+              if root not in earliest or row['date']<earliest[root]: earliest[root]=row['date']
 
-              parsed_rows.append({
-                  'token': tokens[0],
-                  'est_id': est_id,
-                  'old_id': old_id,
-                  'name': name,
-                  'address': address,
-                  'date': parsed,
-                  'status': status,
-                  'inspection_id': inspection_id,
-                  'lat': latf,
-                  'lon': lonf,
-              })
-
-          events = defaultdict(set)
-          latest = {}
-          earliest = {}
-          for row in parsed_rows:
-              root = find(row['token'])
-              event = ('id:' + row['inspection_id']) if row['inspection_id'] else ('date:' + row['date'].date().isoformat() + '|status:' + row['status'].strip().lower())
-              events[root].add(event)
-              if root not in earliest or row['date'] < earliest[root]:
-                  earliest[root] = row['date']
-              if root not in latest or row['date'] > latest[root]['date']:
-                  latest[root] = row
-
-          records = []
-          for root, row in latest.items():
-              dining = 0 if non_dining.search(f"{row['name']} {row['address']}") else 1
+          dining_re=re.compile(r'(restaurant|food\s*take\s*out|cafe|café|coffee|cocktail\s*bar|beverage\s*room|bar\b|pub\b|tavern)',re.I)
+          records=[]
+          for root,row in latest_current.items():
+              # Historical inspections have stable inspection IDs. Current-feed
+              # inspections that overlap 2023 history are not counted twice.
+              count=len(hist_ids[root])
+              if not hist_ids[root]: count+=len(hist_pairs[root])
+              count+=len(current_pairs[root]-hist_pairs[root])
+              dining=1 if dining_re.search(row.get('type','')) else 0
               records.append({
-                  '_date': row['date'],
-                  'ESTABLISHMENT_ID': row['est_id'] or row['old_id'],
-                  'OLD_ESTABLISHMENT_ID': row['old_id'],
-                  'ESTABLISHMENT_NAME': row['name'],
-                  'ESTABLISHMENT_ADDRESS': row['address'],
-                  'ESTABLISHMENT_TYPE': 'Dining-focused (derived)' if dining else 'Other food premises',
-                  'DINING': dining,
-                  'INSPECTION_COUNT': len(events[root]),
-                  'FIRST_INSPECTION_DATE': earliest[root].date().isoformat(),
-                  'INSPECTION_DATE': row['date'].date().isoformat(),
-                  'ESTABLISHMENT_STATUS': row['status'],
-                  'LATITUDE': f"{row['lat']:.9f}".rstrip('0').rstrip('.'),
-                  'LONGITUDE': f"{row['lon']:.9f}".rstrip('0').rstrip('.'),
+                  '_date':row['date'],
+                  'ESTABLISHMENT_ID':row['est_id'],
+                  'OLD_ESTABLISHMENT_ID':row.get('old_id',''),
+                  'ESTABLISHMENT_NAME':row['name'],
+                  'ESTABLISHMENT_ADDRESS':row['address'],
+                  'ESTABLISHMENT_TYPE':row.get('type') or 'Food premises',
+                  'DINING':dining,
+                  'INSPECTION_COUNT':count,
+                  'FIRST_INSPECTION_DATE':earliest[root].date().isoformat(),
+                  'INSPECTION_DATE':row['date'].date().isoformat(),
+                  'ESTABLISHMENT_STATUS':row['status'],
+                  'LATITUDE':f"{row['lat']:.9f}".rstrip('0').rstrip('.'),
+                  'LONGITUDE':f"{row['lon']:.9f}".rstrip('0').rstrip('.'),
               })
 
-          records.sort(key=lambda x: x['_date'], reverse=True)
-          if len(records) < 5000:
-              raise SystemExit(f'Normalization produced only {len(records)} establishments from {source_rows} source rows')
-          newest = records[0]['_date']
-          if newest < datetime.now(timezone.utc) - timedelta(days=14):
-              raise SystemExit(f'DineSafe source appears stale; newest inspection is {newest.date()}')
+          records.sort(key=lambda x:x['_date'],reverse=True)
+          if len(records)<10000: raise SystemExit(f'Only {len(records)} current establishments after history merge')
+          newest=records[0]['_date']
+          if newest<datetime.now(timezone.utc)-timedelta(days=14): raise SystemExit(f'Current feed stale: {newest.date()}')
 
-          fields = ['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','FIRST_INSPECTION_DATE','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
-          with open('data/dinesafe.csv', 'w', encoding='utf-8', newline='') as f:
-              writer = csv.DictWriter(f, fieldnames=fields)
-              writer.writeheader()
+          fields=['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','FIRST_INSPECTION_DATE','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
+          with open('data/dinesafe.csv','w',encoding='utf-8',newline='') as f:
+              w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
               for rec in records:
-                  rec.pop('_date', None)
-                  writer.writerow(rec)
+                  rec.pop('_date',None);w.writerow(rec)
 
-          new_records = [r for r in records if int(r['INSPECTION_COUNT']) == 1]
-          print(f'Source rows: {source_rows}')
-          print(f'Merged establishments: {len(records)}')
-          print(f'Establishments with exactly one inspection in full published history: {len(new_records)}')
-          print(f'Oldest first inspection among one-inspection establishments: {min((r["FIRST_INSPECTION_DATE"] for r in new_records), default="none")}')
-          print(f'Newest inspection: {newest.date()}')
+          new=[r for r in records if int(r['INSPECTION_COUNT'])==1]
+          print('Historical source rows:',historical_rows)
+          print('Current source rows:',current_rows)
+          print('Current establishments:',len(records))
+          print('Exactly one inspection across 2001-present:',len(new))
+          print('Oldest first inspection among one-inspection establishments:',min((r['FIRST_INSPECTION_DATE'] for r in new),default='none'))
+          print('Dining-focused one-inspection establishments:',sum(int(r['DINING']) for r in new))
+          print('Newest current inspection:',newest.date())
+          print('Top current types:',Counter(r['ESTABLISHMENT_TYPE'] for r in records).most_common(15))
           PY
 
           test -s data/dinesafe.csv
@@ -211,5 +229,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/dinesafe.csv
-          git commit -m "Merge DineSafe establishment histories"
+          git commit -m "Use full DineSafe inspection history"
           git push
