@@ -33,6 +33,8 @@ h1{margin:8px 0 7px;font-size:clamp(2rem,10vw,3rem);line-height:.98;letter-spaci
 .empty{padding:28px 20px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:18px;background:color-mix(in srgb,var(--surface) 52%,transparent)}.footer{margin:22px 3px 0;color:var(--muted);font-size:.74rem;line-height:1.55}.spinner{width:14px;height:14px;display:inline-block;border:2px solid color-mix(in srgb,var(--accent) 25%,transparent);border-top-color:var(--accent);border-radius:50%;vertical-align:-2px;margin-right:7px;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(min-width:650px){.shell{padding-left:24px;padding-right:24px}.locate-card{display:grid;grid-template-columns:1fr auto;align-items:center;gap:14px}.locate-btn{width:auto;min-width:220px;margin-top:0}.filter-grid{grid-template-columns:1fr 1fr}.list{grid-template-columns:1fr 1fr}.item{display:flex;flex-direction:column}.inspection{margin-top:auto}.header{padding-top:20px}.toolbar{top:0}}
 @media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+
+.manual-card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px;margin:0 0 12px}.manual-card[hidden]{display:none}.manual-title{font-weight:800}.manual-copy{margin:3px 0 10px;color:var(--muted);font-size:.84rem}.manual-row{display:grid;grid-template-columns:1fr;gap:8px}.manual-input{width:100%;min-height:46px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);padding:0 11px}.manual-btn{min-height:46px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font-weight:800;padding:0 14px}.secondary-link{border:0;background:none;color:var(--accent);font-weight:750;padding:0 2px 10px;cursor:pointer}.status button{font:inherit;border:0;background:none;color:inherit;text-decoration:underline;padding:0;cursor:pointer;font-weight:750}.debug{margin:12px 3px 0;color:var(--muted);font-size:.72rem}.debug pre{white-space:pre-wrap;word-break:break-word;font:inherit}.filter-note{color:var(--muted);font-size:.74rem;margin:6px 0 0 30px}@media(min-width:650px){.manual-row{grid-template-columns:1fr auto}}
 </style>
 </head>
 <body>
@@ -54,6 +56,13 @@ h1{margin:8px 0 7px;font-size:clamp(2rem,10vw,3rem);line-height:.98;letter-spaci
     <button class="locate-btn" id="locate">Use my location</button>
   </section>
 
+<section class="manual-card" id="manualCard" hidden aria-labelledby="manual-heading">
+  <div class="manual-title" id="manual-heading">Use an address instead</div>
+  <div class="manual-copy">If iOS blocks location, enter a Toronto address or intersection. You can also paste latitude, longitude.</div>
+  <div class="manual-row"><input class="manual-input" id="manualInput" autocomplete="street-address" inputmode="search" placeholder="e.g. Danforth Ave & Pape Ave"><button class="manual-btn" id="manualGo">Find nearby</button></div>
+</section>
+<button class="secondary-link" id="manualToggle" type="button">Use an address instead</button>
+
   <div class="toolbar" aria-label="Result controls">
     <div class="toolbar-inner">
       <button class="chip" data-sort="newest" aria-pressed="true">Newest</button>
@@ -67,7 +76,8 @@ h1{margin:8px 0 7px;font-size:clamp(2rem,10vw,3rem);line-height:.98;letter-spaci
       <div class="field"><label for="radius">Distance</label><select id="radius"><option value="0.5">Within 500 m</option><option value="1">Within 1 km</option><option value="2" selected>Within 2 km</option><option value="5">Within 5 km</option><option value="10">Within 10 km</option></select></div>
       <div class="field"><label for="age">Inspected</label><select id="age"><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last year</option><option value="99999">Any date</option></select></div>
     </div>
-    <label class="checkrow"><input type="checkbox" id="foodOnly" checked><span>Restaurants, cafés, bars and takeout only</span></label>
+    <label class="checkrow"><input type="checkbox" id="foodOnly" checked><span>Dining-focused places only</span></label>
+    <p class="filter-note">Toronto’s current 2026 feed no longer exposes establishment type. This filter conservatively excludes obvious schools, child care, institutions, grocery/retail and similar premises.</p>
   </section>
 
   <div class="status" id="status" role="status" aria-live="polite"></div>
@@ -79,74 +89,8 @@ h1{margin:8px 0 7px;font-size:clamp(2rem,10vw,3rem);line-height:.98;letter-spaci
   <section class="list" id="results" aria-live="polite"><div class="empty">Your nearby inspections will appear here.</div></section>
 
   <p class="footer">Source: City of Toronto Open Data, DineSafe. Multiple infraction rows are grouped to each establishment’s latest inspection. Distance is straight-line, not walking distance.</p>
+  <details class="debug"><summary>Location diagnostics</summary><pre id="debugText"></pre></details>
 </main>
-<script>
-(() => {
-  'use strict';
-  const API = './data/dinesafe.csv';
-  const FALLBACK_CSV = './data/dinesafe.csv';
-  const $ = id => document.getElementById(id);
-  const ui = {locate:$('locate'),locSub:$('loc-sub'),radius:$('radius'),age:$('age'),foodOnly:$('foodOnly'),status:$('status'),summary:$('summary'),results:$('results'),filters:$('filters'),filterToggle:$('filterToggle'),filterCount:$('filterCount')};
-  let coords = null, establishments = null, sortMode = 'newest';
-
-  function status(msg, isError=false){ui.status.className='status show'+(isError?' error':'');ui.status.innerHTML=msg;}
-  function clearStatus(){ui.status.className='status';ui.status.textContent='';}
-  function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-  function normKey(k){return String(k).toUpperCase().replace(/[^A-Z0-9]/g,'');}
-  function get(row, aliases){const map={};for(const k of Object.keys(row))map[normKey(k)]=row[k];for(const a of aliases){const v=map[normKey(a)];if(v!==undefined&&v!==null&&String(v).trim()!=='')return String(v).trim();}return '';}
-  function parseNum(v){if(!v)return NaN;const n=Number(String(v).replace(/[()\[\]]/g,'').trim());return Number.isFinite(n)?n:NaN;}
-  function parseDate(v){if(!v)return null;const s=String(v).trim();let d=new Date(s);if(Number.isNaN(d.getTime())){const m=s.match(/(\d{4})[-\/]?(\d{2})[-\/]?(\d{2})/);if(m)d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));}return d&&!Number.isNaN(d.getTime())?d:null;}
-  function hav(lat1,lon1,lat2,lon2){const R=6371,rad=Math.PI/180,dLat=(lat2-lat1)*rad,dLon=(lon2-lon1)*rad;const a=Math.sin(dLat/2)**2+Math.cos(lat1*rad)*Math.cos(lat2*rad)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(a));}
-  function parseCSV(text){const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i];if(q){if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}else if(c==='"')q=false;else cell+=c;}else{if(c==='"')q=true;else if(c===','){row.push(cell);cell='';}else if(c==='\n'){row.push(cell.replace(/\r$/,''));rows.push(row);row=[];cell='';}else cell+=c;}}if(cell.length||row.length){row.push(cell);rows.push(row);}if(!rows.length)return[];const headers=rows.shift().map(h=>h.trim());return rows.filter(r=>r.some(v=>String(v).trim())).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??''])));}
-
-  async function getCsvUrl(){try{const r=await fetch(API,{cache:'no-store'});if(!r.ok)throw new Error('metadata '+r.status);const j=await r.json();const res=(j.result?.resources||[]).filter(x=>String(x.format||'').toUpperCase()==='CSV');const preferred=res.find(x=>/dinesafe\.csv/i.test(x.url||''))||res.find(x=>x.url);if(preferred?.url)return preferred.url;}catch(e){console.warn('Using fallback DineSafe CSV URL',e);}return FALLBACK_CSV;}
-
-  async function loadData(){if(establishments)return establishments;status('<span class="spinner"></span>Loading current DineSafe inspections…');const url=await getCsvUrl();const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error('DineSafe download failed ('+r.status+')');const rows=parseCSV(await r.text());if(!rows.length)throw new Error('The DineSafe file was empty.');
-    const byId=new Map();
-    for(const row of rows){
-      const id=get(row,['ESTABLISHMENT_ID','ESTABLISHMENTID','ID']);
-      const name=get(row,['ESTABLISHMENT_NAME','ESTABLISHMENTNAME','NAME']);
-      if(!id&&!name)continue;
-      const address=get(row,['ESTABLISHMENT_ADDRESS','ESTABLISHMENTADDRESS','ADDRESS']);
-      const type=get(row,['ESTABLISHMENT_TYPE','ESTABLISHMENTTYPE','TYPE']);
-      const date=parseDate(get(row,['INSPECTION_DATE','INSPECTIONDATE','DATE']));
-      const inspectionId=get(row,['INSPECTION_ID','INSPECTIONID']);
-      const result=get(row,['ESTABLISHMENT_STATUS','ESTABLISHMENTSTATUS','STATUS','INSPECTION_STATUS','INSPECTIONSTATUS']);
-      const lat=parseNum(get(row,['LATITUDE','LAT'])), lon=parseNum(get(row,['LONGITUDE','LON','LNG']));
-      const key=id||name+'|'+address;
-      let e=byId.get(key);
-      if(!e){e={id,name,address,type,lat,lon,date,result,inspectionId};byId.set(key,e);}
-      const newer=date&&(!e.date||date>e.date);if(newer){e.date=date;e.result=result;e.inspectionId=inspectionId||e.inspectionId;}
-      if((!Number.isFinite(e.lat)||!Number.isFinite(e.lon))&&Number.isFinite(lat)&&Number.isFinite(lon)){e.lat=lat;e.lon=lon;}
-    }
-    establishments=[...byId.values()].filter(e=>Number.isFinite(e.lat)&&Number.isFinite(e.lon)&&e.date);
-    if(!establishments.length)throw new Error('The current DineSafe file did not expose usable coordinates.');
-    clearStatus();return establishments;
-  }
-
-  function isRestaurantish(type){return /(restaurant|food take.?out|cafe|caf[eé]|coffee|bar|pub|tavern|food court|bakery|eating|drinking)/i.test(type||'');}
-  function fmtDate(d){return new Intl.DateTimeFormat('en-CA',{month:'short',day:'numeric'}).format(d);}
-  function ageDays(d){return Math.max(0,Math.floor((Date.now()-d.getTime())/86400000));}
-  function ageLabel(days){if(days===0)return'Today';if(days===1)return'Yesterday';return days+' days ago';}
-  function statusClass(s){s=(s||'').toLowerCase();if(s.includes('conditional'))return'conditional';if(s.includes('closed')||s.includes('close'))return'closed';return'pass';}
-  function updateFilterCount(){let n=0;if(ui.radius.value!=='2')n++;if(ui.age.value!=='90')n++;if(!ui.foodOnly.checked)n++;ui.filterCount.textContent=n;ui.filterCount.classList.toggle('show',n>0);}
-
-  function render(){updateFilterCount();if(!coords||!establishments)return;const radius=Number(ui.radius.value),maxAge=Number(ui.age.value),only=ui.foodOnly.checked;
-    let arr=establishments.map(e=>({...e,distance:hav(coords.lat,coords.lon,e.lat,e.lon),days:ageDays(e.date)})).filter(e=>e.distance<=radius&&e.days<=maxAge&&(!only||isRestaurantish(e.type)));
-    if(sortMode==='closest')arr.sort((a,b)=>a.distance-b.distance||b.date-a.date);else arr.sort((a,b)=>b.date-a.date||a.distance-b.distance);
-    const shown=arr.slice(0,50);ui.summary.textContent=arr.length?`${arr.length.toLocaleString()} found · showing ${shown.length}`:'No matches';
-    if(!shown.length){ui.results.innerHTML='<div class="empty">No places match these filters. Try a larger distance or older inspection window.</div>';return;}
-    ui.results.innerHTML=shown.map((e,i)=>{const ds=e.distance<1?Math.round(e.distance*1000)+' m':e.distance.toFixed(1)+' km';const map='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(e.name+' '+e.address+', Toronto');const dine='https://www.toronto.ca/community-people/health-wellness-care/health-programs-advice/food-safety/dinesafe/';const cls=statusClass(e.result);return `<article class="item"><div class="topline"><div class="rank">${i+1}</div><div class="maincopy"><h3>${esc(e.name)}</h3><div class="address">${esc(e.address)}</div></div><div class="distance">${ds}<small>away</small></div></div><div class="inspection"><div class="datebox"><strong>${fmtDate(e.date)}</strong><span>${ageLabel(e.days)}</span></div><div class="inspection-copy"><div class="statusline ${cls}">${esc(e.result||'Inspection recorded')}</div><div class="type">${esc(e.type||'Food premises')}</div></div></div><div class="actions"><a class="action primary" href="${map}" target="_blank" rel="noopener">Open in Maps</a><a class="action" href="${dine}" target="_blank" rel="noopener">DineSafe</a></div></article>`;}).join('');
-  }
-
-  async function run(){if(!navigator.geolocation){status('This browser does not support geolocation.',true);return;}ui.locate.disabled=true;ui.locate.textContent='Finding location…';clearStatus();navigator.geolocation.getCurrentPosition(async pos=>{coords={lat:pos.coords.latitude,lon:pos.coords.longitude};ui.locSub.textContent=`Located · about ${Math.round(pos.coords.accuracy)} m accuracy`;ui.locate.textContent='Refresh location';try{await loadData();render();}catch(e){console.error(e);status('DineSafe data could not be loaded: '+esc(e.message),true);}finally{ui.locate.disabled=false;}},err=>{const secure=window.isSecureContext?'secure':'not secure';const msg=err.code===1?'Location permission was denied by iOS/Safari for this site. In Safari, open Page Menu → Website Settings → Location → Allow. Also check Settings → Privacy & Security → Location Services → Safari Websites. Then reload this page.':err.code===2?'Your device could not determine a location. Check Location Services and network access.':'Location lookup timed out. Try again.';status(msg+' (error '+err.code+', '+secure+' context)',true);ui.locate.disabled=false;ui.locate.textContent='Try again';},{enableHighAccuracy:true,timeout:12000,maximumAge:60000});}
-
-  ui.locate.addEventListener('click',run);
-  document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{sortMode=btn.dataset.sort;document.querySelectorAll('[data-sort]').forEach(b=>b.setAttribute('aria-pressed',String(b===btn)));render();}));
-  ui.filterToggle.addEventListener('click',()=>{const open=!ui.filters.classList.contains('open');ui.filters.classList.toggle('open',open);ui.filterToggle.setAttribute('aria-expanded',String(open));});
-  [ui.radius,ui.age,ui.foodOnly].forEach(el=>el.addEventListener('change',render));
-  updateFilterCount();
-})();
-</script>
+<script src="./app.js"></script>
 </body>
 </html>
