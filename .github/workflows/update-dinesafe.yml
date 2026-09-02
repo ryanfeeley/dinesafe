@@ -183,7 +183,7 @@ jobs:
                   # deliberately recall-oriented for new restaurants with names
                   # that do not include words such as “restaurant” or “cafe”.
                   dining=0 if non_dining_name_re.search(row['name']) else 1
-                  display_type='Dining-focused (type unavailable)' if dining else 'Other food premises (derived)'
+                  display_type='Dining-focused' if dining else 'Other food premises (derived)'
 
               records.append({
                   '_date':row['date'],
