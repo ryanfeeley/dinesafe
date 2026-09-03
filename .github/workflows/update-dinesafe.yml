@@ -168,9 +168,9 @@ jobs:
 
           records=[]
           for root,row in latest_current.items():
-              count=len(hist_ids[root])
-              if not hist_ids[root]: count+=len(hist_pairs[root])
-              count+=len(current_pairs[root]-hist_pairs[root])
+              hist_count=len(hist_ids[root])
+              if not hist_count: hist_count=len(hist_pairs[root])
+              count=hist_count+len(current_pairs[root]-hist_pairs[root])
 
               hist_type=latest_hist_type.get(root,(None,''))[1]
               if hist_type:
@@ -194,6 +194,7 @@ jobs:
                   'ESTABLISHMENT_TYPE':display_type,
                   'DINING':dining,
                   'INSPECTION_COUNT':count,
+                  'HISTORICAL_INSPECTION_COUNT':hist_count,
                   'FIRST_INSPECTION_DATE':earliest[root].date().isoformat(),
                   'INSPECTION_DATE':row['date'].date().isoformat(),
                   'ESTABLISHMENT_STATUS':row['status'],
@@ -206,18 +207,20 @@ jobs:
           newest=records[0]['_date']
           if newest<datetime.now(timezone.utc)-timedelta(days=14): raise SystemExit(f'Current feed stale: {newest.date()}')
 
-          fields=['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','FIRST_INSPECTION_DATE','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
+          fields=['ESTABLISHMENT_ID','OLD_ESTABLISHMENT_ID','ESTABLISHMENT_NAME','ESTABLISHMENT_ADDRESS','ESTABLISHMENT_TYPE','DINING','INSPECTION_COUNT','HISTORICAL_INSPECTION_COUNT','FIRST_INSPECTION_DATE','INSPECTION_DATE','ESTABLISHMENT_STATUS','LATITUDE','LONGITUDE']
           with open('data/dinesafe.csv','w',encoding='utf-8',newline='') as f:
               w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
               for rec in records:
                   rec.pop('_date',None);w.writerow(rec)
 
           new=[r for r in records if int(r['INSPECTION_COUNT'])==1]
+          current_only=[r for r in records if int(r['HISTORICAL_INSPECTION_COUNT'])==0]
           dining_new=[r for r in new if int(r['DINING'])==1]
           print('Historical source rows:',historical_rows)
           print('Current source rows:',current_rows)
           print('Current establishments:',len(records))
           print('Exactly one inspection across 2001-present:',len(new))
+          print('No matching historical record:',len(current_only))
           print('Dining-focused one-inspection establishments:',len(dining_new))
           print('Oldest first inspection among dining one-inspection establishments:',min((r['FIRST_INSPECTION_DATE'] for r in dining_new),default='none'))
           print('Newest current inspection:',newest.date())
@@ -232,7 +235,7 @@ jobs:
         shell: bash
         run: |
           node --check app.js
-          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID,ESTABLISHMENT_NAME,ESTABLISHMENT_ADDRESS,ESTABLISHMENT_TYPE,DINING,INSPECTION_COUNT,FIRST_INSPECTION_DATE' data/dinesafe.csv
+          grep -q '^ESTABLISHMENT_ID,OLD_ESTABLISHMENT_ID,ESTABLISHMENT_NAME,ESTABLISHMENT_ADDRESS,ESTABLISHMENT_TYPE,DINING,INSPECTION_COUNT,HISTORICAL_INSPECTION_COUNT,FIRST_INSPECTION_DATE' data/dinesafe.csv
 
       - name: Commit updated data
         shell: bash
