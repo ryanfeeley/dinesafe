@@ -85,8 +85,10 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
         <button class="manual-btn" id="manualGo">Find nearby</button>
       </div>
     </div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
   </section>
 
+  <div id="location-content" hidden>
   <section class="visible-controls" aria-label="Result controls">
     <div class="visible-controls-grid">
       <div class="field sort-field">
@@ -128,8 +130,6 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
     <section class="filters" id="filters"><input type="checkbox" id="foodOnly" checked tabindex="-1"></section>
   </div>
 
-  <div class="status" id="status" role="status" aria-live="polite"></div>
-
   <div class="results-head">
     <h2>Nearby</h2>
     <div class="summary" id="summary">Use your location to begin</div>
@@ -138,8 +138,9 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
   <p class="footer">Source: City of Toronto Open Data, DineSafe. Historical and current inspection records are combined to count recorded inspections. Distance is straight-line, not walking distance.</p>
   <details class="debug"><summary>Location diagnostics</summary><pre id="debugText"></pre></details>
+</div>
 </main>
-<script src="./app-20260904-fit-grid.js?v=20261012-card-link"></script>
+<script src="./app-20260904-fit-grid.js?v=20261114-location-first"></script>
 <script>
 (() => {
   const sort = document.getElementById('sort');
